@@ -1,0 +1,75 @@
+trigger:
+- master
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  solution: '**/*.sln'
+  buildPlatform: 'Any CPU'
+  buildConfiguration: 'Release'
+
+steps:
+# 🔹 Install NuGet
+- task: NuGetToolInstaller@1
+
+# 🔹 Restore Dependencies
+- task: NuGetCommand@2
+  inputs:
+    restoreSolution: '$(solution)'
+
+# 🔹 Build Solution
+- task: VSBuild@1
+  inputs:
+    solution: '$(solution)'
+    msbuildArgs: '/p:DeployOnBuild=true /p:WebPublishMethod=Package /p:PackageAsSingleFile=true /p:SkipInvalidConfigurations=true /p:PackageLocation="$(build.artifactStagingDirectory)"'
+    platform: '$(buildPlatform)'
+    configuration: '$(buildConfiguration)'
+
+# 🔹 Run Tests with Code Coverage
+- task: VSTest@2
+  displayName: 'Run Tests with Code Coverage'
+  inputs:
+    platform: '$(buildPlatform)'
+    configuration: '$(buildConfiguration)'
+    codeCoverageEnabled: true
+
+# 🔹 Install ReportGenerator
+- task: DotNetCoreCLI@2
+  displayName: 'Install ReportGenerator Tool'
+  inputs:
+    command: custom
+    custom: tool
+    arguments: install --tool-path . dotnet-reportgenerator-globaltool
+
+# 🔹 Generate Code Coverage Report
+- script: |
+    .\reportgenerator -reports:$(Build.SourcesDirectory)\**\TestResults\**\*.coveragexml -targetdir:$(Build.SourcesDirectory)\coverlet\reports -reporttypes:"HtmlInline_AzurePipelines;Cobertura"
+  displayName: 'Generate Code Coverage Report'
+
+# 🔹 Publish Code Coverage Report
+- task: PublishBuildArtifacts@1
+  displayName: 'Upload Code Coverage Report'
+  inputs:
+    pathToPublish: $(Build.SourcesDirectory)\coverlet\reports
+    artifactName: 'CodeCoverageReport'
+
+# 🔹 Snyk Security Scan
+- task: SnykSecurityScan@1
+  displayName: 'Run Snyk Security Scan'
+  inputs:
+    serviceConnectionEndpoint: 'Snyk-Security-Scanner'
+    testType: 'app'
+    monitorWhen: 'always'
+    failOnIssues: false
+    additionalArguments: '--json > snyk-report.json'
+
+- script: cat snyk-report.json
+  displayName: 'Display Snyk Report in Logs'
+
+# 🔹 Upload Snyk Report as an Artifact
+- task: PublishBuildArtifacts@1
+  displayName: 'Upload Snyk Report'
+  inputs:
+    pathToPublish: snyk-report.json
+    artifactName: 'SnykReport'
